@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Concept Board</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo, useRef } = React;
+
+    const BACKEND_URL = "http://localhost:5000";
+
+    const MODEL_OPTIONS = [
+      { id: "seedream_4", label: "Seedream 4", apiModel: "bytedance/seedream-v4-text-to-image", apiEditModel: "bytedance/seedream-v4-edit" },
+      { id: "nano_banana", label: "Nano Banana", apiModel: "google/nano-banana", apiEditModel: "google/nano-banana-edit" },
+      { id: "gpt4o_image", label: "GPT-4o Image", apiType: "gpt4o" },
+      { id: "flux_kontext", label: "Flux Kontext", apiType: "flux_kontext" },
+      { id: "imagen4", label: "Imagen 4", apiModel: "google/imagen4" },
+      { id: "ideogram", label: "Ideogram", apiModel: "ideogram/v3-text-to-image", apiEditModel: "ideogram/v3-edit" },
+      { id: "development", label: "Development", apiType: "mock" },
+    ];
+
+    async function fetchAudioOptions() {
+      try {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(
+          `${BACKEND_URL}/api/sheets/read?range=Song_Audio!A2:E`,
+          { headers: { "Authorization": `Bearer ${token}` } }
+        );
+        const data = await res.json();
+        return (data.values || []).map(row => ({
+          song_id: row[0] || "",
+          song_name: row[1] || "",
+          lyric: row[2] || "",
+          length: row[3] || "",
+          audio_link: row[4] || ""
+        }));
+      } catch (err) {
+        console.error("Failed to fetch audio options:", err);
+        return [];
+      }
+    }
+
+    async function fetchReferenceImages() {
+      try {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(
+          `${BACKEND_URL}/api/sheets/read?range=image_ref!A:A`,
+          { headers: { "Authorization": `Bearer ${token}` } }
+        );
+        const data = await res.json();
+        console.log("Reference images data:", data);
+        const urls = (data.values || []).map(row => {
+          let url = row[0];
+          if (!url || !url.startsWith('http')) return null;
+          // Convert Google Drive URLs to direct image URLs
+          if (url.includes('drive.google.com')) {
+            const match = url.match(/[?&]id=([^&]+)/);
+            if (match) {
+              url = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w400`;
+            }
+          }
+          return url;
+        }).filter(url => url);
+        console.log("Filtered reference image URLs:", urls);
+        return urls;
+      } catch (err) {
+        console.error("Failed to fetch reference images:", err);
+        return [];
+      }
+    }
+
+    function makeConceptId() {
+      const d = new Date();
+      const stamp = d.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+      return `cpt_${stamp}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    async function createTask(prompt, referenceImageUrl = null, modelId = "seedream_4") {
+      const modelOpt = MODEL_OPTIONS.find(m => m.id === modelId);
+      
+      if (modelOpt.apiType === "gpt4o") {
+        const body = {
+          filesUrl: referenceImageUrl ? [referenceImageUrl] : [],
+          prompt,
+          size: "2:3",
+          isEnhance: false,
+          uploadCn: false,
+          nVariants: 1,
+          enableFallback: false,
+          fallbackModel: "FLUX_MAX"
+        };
+        const res = await fetch(`${BACKEND_URL}/api/gpt4o-create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        return res.json();
+      }
+      
+      if (modelOpt.apiType === "flux_kontext") {
+        const body = {
+          prompt,
+          enableTranslation: true,
+          aspectRatio: "9:16",
+          outputFormat: "png",
+          promptUpsampling: false,
+          model: "flux-kontext-pro"
+        };
+        const res = await fetch(`${BACKEND_URL}/api/flux-kontext-create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        return res.json();
+      }
+      
+      const apiModel = referenceImageUrl ? modelOpt.apiEditModel : modelOpt.apiModel;
+      let body;
+      if (modelId === "ideogram") {
+        body = { model: apiModel, input: { prompt, rendering_speed: "BALANCED", style: "AUTO", expand_prompt: true, image_size: "portrait_16_9", num_images: "1", sync_mode: false } };
+      } else if (modelId === "imagen4") {
+        body = { model: apiModel, input: { prompt, aspect_ratio: "9:16", num_images: "1" } };
+      } else if (modelId === "nano_banana") {
+        body = referenceImageUrl
+          ? { model: apiModel, input: { prompt, image_urls: [referenceImageUrl], output_format: "png", image_size: "9:16" } }
+          : { model: apiModel, input: { prompt, output_format: "png", image_size: "9:16" } };
+      } else {
+        body = referenceImageUrl
+          ? { model: apiModel, input: { prompt, image_urls: [referenceImageUrl], image_size: "portrait_16_9", image_resolution: "1K", max_images: 1 } }
+          : { model: apiModel, input: { prompt, image_size: "portrait_16_9", image_resolution: "1K", max_images: 1 } };
+      }
+
+      const res = await fetch(`${BACKEND_URL}/api/create-task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      return res.json();
+    }
+
+    async function queryTask(taskId, modelId = "seedream_4") {
+      const modelOpt = MODEL_OPTIONS.find(m => m.id === modelId);
+      let endpoint = "query-task";
+      if (modelOpt?.apiType === "gpt4o") endpoint = "gpt4o-query";
+      if (modelOpt?.apiType === "flux_kontext") endpoint = "flux-kontext-query";
+      const res = await fetch(`${BACKEND_URL}/api/${endpoint}?taskId=${taskId}`);
+      return res.json();
+    }
+
+    async function pollTask(taskId, maxAttempts = 60, modelId = "seedream_4") {
+      const modelOpt = MODEL_OPTIONS.find(m => m.id === modelId);
+      
+      for (let i = 0; i < maxAttempts; i++) {
+        const result = await queryTask(taskId, modelId);
+        console.log(`Poll attempt ${i + 1}:`, result);
+        
+        if (modelOpt?.apiType === "gpt4o") {
+          if (result.data?.response?.resultUrls?.[0]) {
+            return result.data.response.resultUrls[0];
+          }
+          if (result.data?.status === "FAILED") throw new Error("Task failed");
+        } else if (modelOpt?.apiType === "flux_kontext") {
+          if (result.data?.response?.resultImageUrl) {
+            return result.data.response.resultImageUrl;
+          }
+          if (result.data?.errorCode) throw new Error("Task failed");
+        } else {
+          if (result.data?.state === "success" && result.data?.resultJson) {
+            const resultData = JSON.parse(result.data.resultJson);
+            const imageUrl = resultData.resultUrls?.[0];
+            if (imageUrl) return imageUrl;
+          }
+          if (result.data?.state === "failed") throw new Error("Task failed");
+        }
+        
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      throw new Error("Timeout");
+    }
+
+    async function getGoogleAccessToken() {
+      const res = await fetch(`${BACKEND_URL}/api/google-auth`, { method: "POST" });
+      const data = await res.json();
+      return data.access_token;
+    }
+
+    async function appendToGoogleSheet(entry, audioLink, audioLength, batchId, batchConceptId, songName, lyric) {
+      try {
+        const token = await getGoogleAccessToken();
+        const row = [
+          batchId || "",
+          batchConceptId || "",
+          entry.song_id || "",
+          songName || entry.audio_clip || "",
+          lyric || "",
+          entry.text_hook || "false",
+          entry.prompt,
+          audioLength || "",
+          entry.video_prompt || "",
+          entry.reference_image_name || "",
+          audioLink || "",
+          entry.generated_image_url,
+          entry.status
+        ];
+        
+        const res = await fetch(`${BACKEND_URL}/api/sheets/append`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ sheet: "02_Video", values: [row] })
+        });
+        
+        if (!res.ok) throw new Error(`Google Sheets API error: ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        console.error("Failed to append to Google Sheet:", err);
+        throw err;
+      }
+    }
+
+    function buildCSV(rows) {
+      const headers = ["timestamp", "concept_id", "prompt", "model", "reference_image_name", "generated_image_url", "video_prompt", "audio_clip", "overlay_text_enabled", "overlay_text", "status"];
+      return [headers.join(",")]
+        .concat(rows.map((r) => [r.timestamp, r.concept_id, JSON.stringify(r.prompt), r.model, r.reference_image_name || "", r.generated_image_url, JSON.stringify(r.video_prompt || ""), r.audio_clip || "", r.overlay_text_enabled ? "true" : "false", JSON.stringify(r.overlay_text || ""), r.status || "READY"].join(",")))
+        .join("\n");
+    }
+
+    function downloadCSV(rows, filename = "saved_concepts.csv") {
+      const csv = buildCSV(rows);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function ImageCard({ card, onSave, audioOptions }) {
+      const [selectedAudioId, setSelectedAudioId] = useState(card.song_id || audioOptions[0]?.song_id || "");
+      const [videoPrompt, setVideoPrompt] = useState(card.video_prompt);
+      const [hasTextHook, setHasTextHook] = useState(card.text_hook !== "false");
+      const [textHook, setTextHook] = useState(card.text_hook !== "false" ? card.text_hook : "we're good");
+      const lyricWasIncluded = card.overlay_text_enabled;
+      
+      const selectedAudio = audioOptions.find(a => String(a.song_id) === String(selectedAudioId)) || audioOptions[0] || {};
+
+      return (
+        <div className="rounded-3xl overflow-hidden border border-neutral-200 bg-white shadow-sm">
+          <div className="p-3 flex items-center justify-between text-xs text-neutral-600">
+            <span className="px-2 py-1 rounded-full bg-neutral-100 border border-neutral-200">{card.model}</span>
+            <span className="px-2 py-1 rounded-full bg-neutral-100 border border-neutral-200">9:16</span>
+          </div>
+          <div className="relative">
+            <img src={card.image_url} alt={card.model} className="w-full aspect-[9/16] object-cover" />
+          </div>
+          <div className="p-4 grid gap-3">
+            <div>
+              <label className="text-xs font-medium">Audio</label>
+              <select value={selectedAudioId} onChange={(e) => setSelectedAudioId(e.target.value)} className="w-full mt-1 p-2 rounded-xl border border-neutral-300">
+                {audioOptions.map((a, i) => {
+                  const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
+                  return <option key={i} value={a.song_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                })}
+              </select>
+            </div>
+            <div>
+              <label className={`text-xs font-medium flex items-center gap-2 ${lyricWasIncluded ? "opacity-50" : ""}`}>
+                <input type="checkbox" className="h-3 w-3" checked={hasTextHook} disabled={lyricWasIncluded} onChange={(e) => setHasTextHook(e.target.checked)} />
+                Add text hook
+              </label>
+              {hasTextHook && (
+                <input type="text" value={textHook} onChange={(e) => setTextHook(e.target.value)} className="mt-1 w-full p-2 rounded-xl border border-neutral-300" />
+              )}
+            </div>
+            <div>
+              <label className="text-xs font-medium">Video prompt</label>
+              <textarea value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} rows={3} className="mt-1 w-full p-2 rounded-xl border border-neutral-300" />
+            </div>
+            <button onClick={() => onSave({ ...card, song_id: selectedAudioId, audio_clip: selectedAudio.song_name, audio_link: selectedAudio.audio_link, audio_length: selectedAudio.length, video_prompt: videoPrompt, text_hook: hasTextHook ? textHook : "false" })} className="w-full px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800">
+              Save Concept
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    async function getMaxBatchId() {
+      try {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(
+          `${BACKEND_URL}/api/sheets/read?range=02_Video!A2:A`,
+          { headers: { "Authorization": `Bearer ${token}` } }
+        );
+        const data = await res.json();
+        const batchIds = (data.values || []).map(row => parseFloat(row[0])).filter(n => !isNaN(n));
+        return batchIds.length > 0 ? Math.max(...batchIds) : 0;
+      } catch (err) {
+        console.error("Failed to fetch max batch_id:", err);
+        return 0;
+      }
+    }
+
+    function ConceptBoardMock() {
+      const [prompt, setPrompt] = useState("");
+      const [models, setModels] = useState(["seedream_4", "nano_banana"]);
+      const [count, setCount] = useState(1);
+      const [referenceFile, setReferenceFile] = useState(null);
+      const [referencePreview, setReferencePreview] = useState(null);
+      const [audioOptions, setAudioOptions] = useState([]);
+      const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
+      const [includeLyric, setIncludeLyric] = useState(false);
+      const [lyricText, setLyricText] = useState("");
+      const [textStyle, setTextStyle] = useState("The text appears slightly off-center and imperfectly aligned, as if hand-placed on a vintage 1970s screenprinted T-shirt. The edges are a bit uneven and the ink looks worn, with slight texture variations where the print didn't fully transfer. Letters show subtle fading and soft bleed into the fabric, giving a warm, sun-washed, timeworn charm.");
+      const [includeReference, setIncludeReference] = useState(false);
+      const [referenceImages, setReferenceImages] = useState([]);
+      const [selectedRefImage, setSelectedRefImage] = useState("");
+      const [addTextHook, setAddTextHook] = useState(false);
+      const [textHook, setTextHook] = useState("we're good");
+      const [isGenerating, setIsGenerating] = useState(false);
+      const [cards, setCards] = useState([]);
+      const [saved, setSaved] = useState([]);
+      const [currentBatchId, setCurrentBatchId] = useState(null);
+      const [batchConceptCount, setBatchConceptCount] = useState(0);
+      const fileInputRef = useRef(null);
+
+      React.useEffect(() => {
+        fetchAudioOptions().then(options => {
+          setAudioOptions(options);
+          if (options.length > 0) setLyricText(options[0].lyric);
+        });
+        fetchReferenceImages().then(images => {
+          setReferenceImages(images);
+        });
+      }, []);
+
+      React.useEffect(() => {
+        if (includeReference) {
+          setModels(prev => prev.filter(m => !["flux_kontext", "imagen4", "ideogram"].includes(m)));
+          if (selectedRefImage) setReferencePreview(selectedRefImage);
+        } else {
+          setReferencePreview(null);
+          setSelectedRefImage("");
+        }
+      }, [includeReference, selectedRefImage]);
+
+      const selectedAudio = audioOptions[selectedAudioIndex] || {};
+
+      function handleRefChange(file) {
+        const f = file ?? fileInputRef.current?.files?.[0] ?? null;
+        setReferenceFile(f || null);
+        if (f) {
+          const reader = new FileReader();
+          reader.onload = () => setReferencePreview(reader.result);
+          reader.readAsDataURL(f);
+        } else {
+          setReferencePreview(null);
+        }
+      }
+
+      async function handleGenerate() {
+        if (!prompt.trim()) {
+          alert("Enter a prompt.");
+          return;
+        }
+        const perModel = Number.isFinite(count) && count > 0 ? Math.min(Math.max(count, 1), 12) : 3;
+        setIsGenerating(true);
+
+        const conceptId = makeConceptId();
+        const newCards = [];
+        
+        try {
+          let refImageUrl = null;
+          if (referenceFile) {
+            alert("Image-to-image requires a publicly accessible URL. Base64/local files are not supported by the API.");
+            setIsGenerating(false);
+            return;
+          }
+
+          const tasks = [];
+          for (const modelId of models) {
+            for (let i = 0; i < perModel; i++) {
+              tasks.push({ modelId, index: i });
+            }
+          }
+
+          const results = await Promise.all(tasks.map(async ({ modelId, index }) => {
+            try {
+              const finalPrompt = includeLyric && lyricText ? `${prompt}. Include text overlay that says: "${lyricText}". ${textStyle}` : prompt;
+              
+              let imgUrl;
+              if (modelId === "development") {
+                await new Promise(r => setTimeout(r, 500));
+                imgUrl = `https://picsum.photos/seed/${Math.random()}/720/1280`;
+              } else {
+                const taskRes = await createTask(finalPrompt, referencePreview || null, modelId);
+                console.log("Create task response:", taskRes);
+                const taskId = taskRes.data?.taskId;
+                
+                if (!taskId) {
+                  console.error("No task ID", taskRes);
+                  return null;
+                }
+
+                console.log("Polling task:", taskId);
+                imgUrl = await pollTask(taskId, 60, modelId);
+                console.log("Got image URL:", imgUrl);
+              }
+              
+              return {
+                id: `${conceptId}-${modelId}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+                concept_id: conceptId,
+                model: modelId,
+                prompt: finalPrompt,
+                image_url: imgUrl,
+                video_prompt: `${prompt}: cinematic slow dolly movement, soft film grain, shallow depth of field, 24fps, gentle parallax, subtle camera drift for emotional focus, light flares and depth layering for realism, smooth motion easing, immersive atmosphere that draws the viewer in`,
+                song_id: selectedAudio.song_id || "",
+                audio_clip: selectedAudio.song_name || "",
+                audio_link: selectedAudio.audio_link || "",
+                audio_length: selectedAudio.length || "",
+                reference_image_name: referenceFile?.name ?? null,
+                overlay_text_enabled: includeLyric,
+                overlay_text: includeLyric ? lyricText : "",
+                text_hook: addTextHook ? textHook : "false",
+                status: "GENERATED",
+              };
+            } catch (err) {
+              console.error(`Error generating image for ${modelId}:`, err);
+              return null;
+            }
+          }));
+
+          newCards.push(...results.filter(r => r !== null));
+        } catch (err) {
+          alert("Error generating images: " + err.message);
+          console.error(err);
+        }
+
+        setCards(newCards);
+        setIsGenerating(false);
+      }
+
+      async function handleSave(card) {
+        // Get or create batch ID
+        let batchId = currentBatchId;
+        if (!batchId) {
+          const maxBatch = await getMaxBatchId();
+          batchId = maxBatch + 1;
+          setCurrentBatchId(batchId);
+          setBatchConceptCount(0);
+        }
+        
+        const newCount = batchConceptCount + 1;
+        setBatchConceptCount(newCount);
+        const batchConceptId = `${batchId}.${newCount}`;
+        
+        const entry = {
+          timestamp: new Date().toISOString(),
+          concept_id: card.concept_id,
+          prompt: card.prompt,
+          model: card.model,
+          reference_image_name: card.reference_image_name,
+          generated_image_url: card.image_url,
+          video_prompt: card.video_prompt,
+          song_id: card.song_id,
+          audio_clip: card.audio_clip,
+          overlay_text_enabled: card.overlay_text_enabled,
+          overlay_text: card.overlay_text,
+          text_hook: card.text_hook,
+          status: "concept approved",
+        };
+        
+        // Add to local state
+        setSaved((prev) => [entry, ...prev]);
+        
+        // Append to Google Sheet
+        try {
+          await appendToGoogleSheet(entry, card.audio_link, card.audio_length, batchId, batchConceptId, card.audio_clip, selectedAudio.lyric);
+          console.log("Successfully saved to Google Sheet");
+        } catch (err) {
+          alert("Saved locally but failed to save to Google Sheet: " + err.message);
+        }
+      }
+
+      const allSelected = useMemo(() => new Set(models), [models]);
+
+      return (
+        <div className="min-h-screen bg-neutral-50 text-neutral-900">
+          <header className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-neutral-200">
+            <div className="max-w-6xl mx-auto p-4">
+              <h1 className="text-2xl font-semibold">Concept Board</h1>
+              <p className="text-sm text-neutral-600">Powered by Kie.AI</p>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto p-4">
+            <section className="grid grid-cols-1 md:grid-cols-12 gap-4">
+              <div className="md:col-span-8">
+                <label className="text-sm font-medium">Prompt</label>
+                <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe your scene…" className="w-full mt-1 p-3 rounded-2xl border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300" rows={3} />
+              </div>
+
+              <div className="md:col-span-4 grid gap-3">
+                <div>
+                  <label className="text-sm font-medium">Models</label>
+                  <div className="mt-1 grid gap-2">
+                    {MODEL_OPTIONS.map((m) => {
+                      const noImageToImage = ["flux_kontext", "imagen4", "ideogram"].includes(m.id);
+                      const isDisabled = includeReference && noImageToImage;
+                      return (
+                        <label key={m.id} className={`flex items-center gap-2 ${isDisabled ? "opacity-50" : ""}`}>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={models.includes(m.id)}
+                            disabled={isDisabled}
+                            onChange={(e) => {
+                              if (e.target.checked) setModels([...models, m.id]);
+                              else setModels(models.filter(x => x !== m.id));
+                            }}
+                          />
+                          {m.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium"># of images per model</label>
+                  <input type="number" min={1} max={12} value={count} onChange={(e) => setCount(Number(e.target.value) || 1)} className="w-full mt-1 p-2 rounded-2xl border border-neutral-300" />
+                  <p className="mt-1 text-xs text-neutral-500">Bounded 1–12.</p>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium">Audio (default for this batch)</label>
+                  <select value={selectedAudioIndex} onChange={(e) => { const idx = Number(e.target.value); setSelectedAudioIndex(idx); setLyricText(audioOptions[idx]?.lyric || ""); }} className="w-full mt-1 p-2 rounded-2xl border border-neutral-300">
+                    {audioOptions.map((a, i) => {
+                      const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
+                      return <option key={i} value={i}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                    })}
+                  </select>
+                  <div className="mt-2 flex items-start gap-2 text-sm">
+                    <label className={`flex items-center gap-2 ${addTextHook ? "opacity-50" : ""}`}>
+                      <input type="checkbox" className="h-4 w-4" checked={includeLyric} disabled={addTextHook} onChange={(e) => { setIncludeLyric(e.target.checked); if (e.target.checked) setAddTextHook(false); }} />
+                      Include lyric text on image
+                    </label>
+                  </div>
+                  {includeLyric && (
+                    <div className="mt-2 grid gap-2">
+                      <div>
+                        <label className="text-xs font-medium">Lyric text</label>
+                        <textarea value={lyricText} onChange={(e) => setLyricText(e.target.value)} rows={2} className="w-full mt-1 p-2 rounded-2xl border border-neutral-300" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium">Text style description</label>
+                        <textarea value={textStyle} onChange={(e) => setTextStyle(e.target.value)} rows={3} className="w-full mt-1 p-2 rounded-2xl border border-neutral-300" />
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" className="h-4 w-4" checked={includeReference} onChange={(e) => setIncludeReference(e.target.checked)} />
+                      Include reference image
+                    </label>
+                  </div>
+                  {includeReference && (
+                    <div className="mt-2">
+                      <label className="text-xs font-medium">Select reference image</label>
+                      <div className="mt-1 flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 border border-neutral-300 rounded-xl">
+                        {referenceImages.map((url, i) => (
+                          <label key={i} className="cursor-pointer">
+                            <input type="radio" name="refImage" value={url} checked={selectedRefImage === url} onChange={(e) => setSelectedRefImage(e.target.value)} className="sr-only" />
+                            <img src={url} alt={`Ref ${i}`} className={`w-16 h-16 object-cover rounded border-2 ${selectedRefImage === url ? "border-blue-500" : "border-neutral-300"}`} />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <label className={`flex items-center gap-2 text-sm ${includeLyric ? "opacity-50" : ""}`}>
+                      <input type="checkbox" className="h-4 w-4" checked={addTextHook} disabled={includeLyric} onChange={(e) => { setAddTextHook(e.target.checked); if (e.target.checked) setIncludeLyric(false); }} />
+                      Add text hook
+                    </label>
+                  </div>
+                  {addTextHook && (
+                    <div className="mt-2">
+                      <input type="text" value={textHook} onChange={(e) => setTextHook(e.target.value)} className="w-full p-2 rounded-xl border border-neutral-300" />
+                    </div>
+                  )}
+                </div>
+
+                <button onClick={handleGenerate} disabled={isGenerating} className="mt-1 px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60">
+                  {isGenerating ? "Generating…" : "Generate"}
+                </button>
+              </div>
+            </section>
+
+            <section className="mt-8">
+              {cards.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {cards.map((card) => <ImageCard key={card.id} card={card} onSave={handleSave} audioOptions={audioOptions} />)}
+                </div>
+              ) : (
+                <div className="text-neutral-500 text-sm">No images yet. Enter a prompt and click Generate.</div>
+              )}
+            </section>
+
+            <section className="mt-10">
+              <h2 className="text-lg font-semibold mb-2">Saved Concepts ({saved.length})</h2>
+              {saved.length === 0 ? (
+                <p className="text-sm text-neutral-600">Nothing saved yet.</p>
+              ) : (
+                <div className="overflow-x-auto border border-neutral-200 rounded-2xl">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-neutral-100">
+                      <tr>
+                        <th className="text-left p-2">Timestamp</th>
+                        <th className="text-left p-2">Concept ID</th>
+                        <th className="text-left p-2">Model</th>
+                        <th className="text-left p-2">Prompt</th>
+                        <th className="text-left p-2">Image URL</th>
+                        <th className="text-left p-2">Audio</th>
+                        <th className="text-left p-2">Text?</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {saved.map((r, i) => (
+                        <tr key={i} className="border-t border-neutral-200">
+                          <td className="p-2 whitespace-nowrap">{r.timestamp}</td>
+                          <td className="p-2 whitespace-nowrap font-mono">{r.concept_id}</td>
+                          <td className="p-2 whitespace-nowrap">{r.model}</td>
+                          <td className="p-2 max-w-[24rem] truncate" title={r.prompt}>{r.prompt}</td>
+                          <td className="p-2 max-w-[18rem] truncate" title={r.generated_image_url}>
+                            <a className="text-blue-600 hover:underline" href={r.generated_image_url} target="_blank" rel="noreferrer">{r.generated_image_url}</a>
+                          </td>
+                          <td className="p-2 whitespace-nowrap">{r.audio_clip}</td>
+                          <td className="p-2 whitespace-nowrap">{r.overlay_text_enabled ? "Yes" : "No"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<ConceptBoardMock />);
+  </script>
+</body>
+</html>
