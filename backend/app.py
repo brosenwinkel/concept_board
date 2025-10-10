@@ -13,6 +13,10 @@ CORS(app)
 def index():
     return send_file('../standalone.html')
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
 API_KEY = os.getenv('API_KEY')
 API_BASE = os.getenv('API_BASE')
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
