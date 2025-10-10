@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import requests
 import os
@@ -8,6 +8,10 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+@app.route('/')
+def index():
+    return send_file('../standalone.html')
 
 API_KEY = os.getenv('API_KEY')
 API_BASE = os.getenv('API_BASE')
@@ -122,4 +126,4 @@ def flux_kontext_query():
     return jsonify(response.json())
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host='0.0.0.0', debug=True, port=5000)
