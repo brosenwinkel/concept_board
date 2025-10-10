@@ -3,13 +3,27 @@
 ## Installation
 
 1. Create virtual environment:
+
+**Windows:**
 ```bash
 py -3.12 -m venv venv
 ```
 
+**macOS:**
+```bash
+python3.12 -m venv venv
+```
+
 2. Activate virtual environment:
+
+**Windows:**
 ```bash
 source venv/Scripts/activate
+```
+
+**macOS:**
+```bash
+source venv/bin/activate
 ```
 
 3. Install dependencies:
