@@ -85,7 +85,7 @@ def sheets_append():
     sheet_name = data.get('sheet', '02_Video')
     
     response = requests.post(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{GOOGLE_SHEET_ID}/values/{sheet_name}:append?valueInputOption=RAW",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{GOOGLE_SHEET_ID}/values/{sheet_name}:append?valueInputOption=USER_ENTERED",
         headers={'Authorization': token, 'Content-Type': 'application/json'},
         json={'values': data['values']}
     )

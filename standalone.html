@@ -191,6 +191,11 @@
       return data.access_token;
     }
 
+    function decodeHtmlEntities(str) {
+      if (typeof str !== 'string') return str;
+      return str.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    }
+
     async function appendToGoogleSheet(entry, audioLink, audioLength, batchId, batchConceptId, songName, lyric) {
       try {
         const token = await getGoogleAccessToken();
@@ -461,7 +466,7 @@
         
         const newCount = batchConceptCount + 1;
         setBatchConceptCount(newCount);
-        const batchConceptId = `${batchId}.${newCount}`;
+        const batchConceptId = String(batchId) + '.' + String(newCount);
         
         const entry = {
           timestamp: new Date().toISOString(),

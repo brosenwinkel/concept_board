@@ -48,6 +48,15 @@ pip install gunicorn
 gunicorn -w 4 -b 0.0.0.0:5000 app:app
 ```
 
+## Docker
+
+### Build and Run
+```bash
+docker-compose up --build
+```
+
+Runs on http://localhost:5001
+
 ## Environment Variables
 
 All secrets are stored in `.env` file (never commit this file).
