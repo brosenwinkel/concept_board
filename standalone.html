@@ -51,7 +51,7 @@
       try {
         const token = await getGoogleAccessToken();
         const res = await fetch(
-          `${BACKEND_URL}/api/sheets/read?range=image_ref!A:A`,
+          `${BACKEND_URL}/api/sheets/read?range=ReferencesLookup!B:B`,
           { headers: { "Authorization": `Bearer ${token}` } }
         );
         const data = await res.json();
@@ -61,7 +61,7 @@
           if (!url || !url.startsWith('http')) return null;
           // Convert Google Drive URLs to direct image URLs
           if (url.includes('drive.google.com')) {
-            const match = url.match(/[?&]id=([^&]+)/);
+            const match = url.match(/\/d\/([^\/]+)/) || url.match(/[?&]id=([^&]+)/);
             if (match) {
               url = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w400`;
             }
