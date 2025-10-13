@@ -30,16 +30,17 @@
       try {
         const token = await getGoogleAccessToken();
         const res = await fetch(
-          `${BACKEND_URL}/api/sheets/read?range=Song_Audio!A2:E`,
+          `${BACKEND_URL}/api/sheets/read?range=Song_Audio!A2:F`,
           { headers: { "Authorization": `Bearer ${token}` } }
         );
         const data = await res.json();
         return (data.values || []).map(row => ({
-          song_id: row[0] || "",
-          song_name: row[1] || "",
-          lyric: row[2] || "",
-          length: row[3] || "",
-          audio_link: row[4] || ""
+          clip_id: row[0] || "",
+          song_id: row[1] || "",
+          song_name: row[2] || "",
+          lyric: row[3] || "",
+          length: row[4] || "",
+          audio_link: row[5] || ""
         }));
       } catch (err) {
         console.error("Failed to fetch audio options:", err);
@@ -251,13 +252,14 @@
     }
 
     function ImageCard({ card, onSave, audioOptions }) {
-      const [selectedAudioId, setSelectedAudioId] = useState(card.song_id || audioOptions[0]?.song_id || "");
+      const initialClipId = card.clip_id || audioOptions[0]?.clip_id || "";
+      const [selectedAudioId, setSelectedAudioId] = useState(initialClipId);
       const [videoPrompt, setVideoPrompt] = useState(card.video_prompt);
       const [hasTextHook, setHasTextHook] = useState(card.text_hook !== "false");
       const [textHook, setTextHook] = useState(card.text_hook !== "false" ? card.text_hook : "we're good");
       const lyricWasIncluded = card.overlay_text_enabled;
       
-      const selectedAudio = audioOptions.find(a => String(a.song_id) === String(selectedAudioId)) || audioOptions[0] || {};
+      const selectedAudio = audioOptions.find(a => String(a.clip_id) === String(selectedAudioId)) || audioOptions[0] || {};
 
       return (
         <div className="rounded-3xl overflow-hidden border border-neutral-200 bg-white shadow-sm">
@@ -274,7 +276,7 @@
               <select value={selectedAudioId} onChange={(e) => setSelectedAudioId(e.target.value)} className="w-full mt-1 p-2 rounded-xl border border-neutral-300">
                 {audioOptions.map((a, i) => {
                   const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
-                  return <option key={i} value={a.song_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                  return <option key={i} value={a.clip_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
                 })}
               </select>
             </div>
@@ -291,7 +293,7 @@
               <label className="text-xs font-medium">Video prompt</label>
               <textarea value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} rows={3} className="mt-1 w-full p-2 rounded-xl border border-neutral-300" />
             </div>
-            <button onClick={() => onSave({ ...card, song_id: selectedAudioId, audio_clip: selectedAudio.song_name, audio_link: selectedAudio.audio_link, audio_length: selectedAudio.length, video_prompt: videoPrompt, text_hook: hasTextHook ? textHook : "false" })} className="w-full px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800">
+            <button onClick={() => onSave({ ...card, clip_id: selectedAudioId, song_id: selectedAudio.song_id, audio_clip: selectedAudio.song_name, audio_link: selectedAudio.audio_link, audio_length: selectedAudio.length, video_prompt: videoPrompt, text_hook: hasTextHook ? textHook : "false" })} className="w-full px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800">
               Save Concept
             </button>
           </div>
@@ -428,6 +430,7 @@
                 prompt: finalPrompt,
                 image_url: imgUrl,
                 video_prompt: `${prompt}: cinematic slow dolly movement, soft film grain, shallow depth of field, 24fps, gentle parallax, subtle camera drift for emotional focus, light flares and depth layering for realism, smooth motion easing, immersive atmosphere that draws the viewer in`,
+                clip_id: selectedAudio.clip_id || "",
                 song_id: selectedAudio.song_id || "",
                 audio_clip: selectedAudio.song_name || "",
                 audio_link: selectedAudio.audio_link || "",
