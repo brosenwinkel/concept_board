@@ -436,12 +436,13 @@
               const descRes = await fetch(`${BACKEND_URL}/api/describe-image`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageData: base64Data })
+                body: JSON.stringify({ imageData: base64Data, mediaType: file.type })
               });
               const descData = await descRes.json();
               videoPrompt = descData.description || "";
             } catch (err) {
               console.error('Failed to describe image:', err);
+              alert('Warning: Image description failed. Continuing without description.');
               videoPrompt = "";
             }
           }

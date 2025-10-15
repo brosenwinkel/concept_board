@@ -133,67 +133,74 @@ def flux_kontext_query():
 
 @app.route('/api/enhance-prompt', methods=['POST'])
 def enhance_prompt():
-    data = request.json
-    prompt = data.get('prompt', '')
-    has_reference = data.get('hasReference', False)
-    
-    if has_reference:
-        instruction = f'Enhance this image generation prompt by adding more visual details, lighting, composition, and artistic style. IMPORTANT: Add "Use Reference Image as Character" at the beginning of the enhanced prompt. The model should use the character from the reference image and place them in the new scene. Retain all specific instructions from the original prompt. Return ONLY the enhanced prompt with no explanations. Original prompt: {prompt}'
-    else:
-        instruction = f'Enhance this image generation prompt by adding more visual details, lighting, composition, and artistic style. Return ONLY the enhanced prompt with no explanations, introductions, or additional text. Original prompt: {prompt}'
-    
-    response = requests.post(
-        'https://api.anthropic.com/v1/messages',
-        headers={
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-        },
-        json={
-            'model': 'claude-sonnet-4-20250514',
-            'max_tokens': 1024,
-            'messages': [{
-                'role': 'user',
-                'content': instruction
-            }]
-        }
-    )
-    
-    result = response.json()
-    enhanced = result['content'][0]['text']
-    return jsonify({'enhanced': enhanced})
+    try:
+        data = request.json
+        prompt = data.get('prompt', '')
+        has_reference = data.get('hasReference', False)
+        
+        if has_reference:
+            instruction = f'Enhance this image generation prompt by adding more visual details, lighting, composition, and artistic style. IMPORTANT: Add "Use Reference Image as Character" at the beginning of the enhanced prompt. The model should use the character from the reference image and place them in the new scene. Retain all specific instructions from the original prompt. Return ONLY the enhanced prompt with no explanations. Original prompt: {prompt}'
+        else:
+            instruction = f'Enhance this image generation prompt by adding more visual details, lighting, composition, and artistic style. Return ONLY the enhanced prompt with no explanations, introductions, or additional text. Original prompt: {prompt}'
+        
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 1024,
+                'messages': [{
+                    'role': 'user',
+                    'content': instruction
+                }]
+            }
+        )
+        
+        result = response.json()
+        enhanced = result['content'][0]['text']
+        return jsonify({'enhanced': enhanced})
+    except Exception as e:
+        return jsonify({'error': str(e), 'enhanced': prompt}), 500
 
 @app.route('/api/generate-video-prompt', methods=['POST'])
 def generate_video_prompt():
-    data = request.json
-    prompt = data.get('prompt', '')
-    
-    response = requests.post(
-        'https://api.anthropic.com/v1/messages',
-        headers={
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-        },
-        json={
-            'model': 'claude-sonnet-4-20250514',
-            'max_tokens': 512,
-            'messages': [{
-                'role': 'user',
-                'content': f'Based on this image prompt, create a video animation prompt that describes how to animate this image using depth of field, parallax effects, camera movements, and other cinematic techniques specific to the scene. Return ONLY the video prompt with no explanations. Image prompt: {prompt}'
-            }]
-        }
-    )
-    
-    result = response.json()
-    video_prompt = result['content'][0]['text']
-    return jsonify({'videoPrompt': video_prompt})
+    try:
+        data = request.json
+        prompt = data.get('prompt', '')
+        
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 512,
+                'messages': [{
+                    'role': 'user',
+                    'content': f'Based on this image prompt, create a video animation prompt that describes how to animate this image using depth of field, parallax effects, camera movements, and other cinematic techniques specific to the scene. Return ONLY the video prompt with no explanations. Image prompt: {prompt}'
+                }]
+            }
+        )
+        
+        result = response.json()
+        video_prompt = result['content'][0]['text']
+        return jsonify({'videoPrompt': video_prompt})
+    except Exception as e:
+        return jsonify({'error': str(e), 'videoPrompt': ''}), 500
 
 @app.route('/api/describe-image', methods=['POST'])
 def describe_image():
     try:
         data = request.json
         image_data = data.get('imageData', '')
+        media_type = data.get('mediaType', 'image/jpeg')
         
         response = requests.post(
             'https://api.anthropic.com/v1/messages',
@@ -212,7 +219,7 @@ def describe_image():
                             'type': 'image',
                             'source': {
                                 'type': 'base64',
-                                'media_type': 'image/jpeg',
+                                'media_type': media_type,
                                 'data': image_data
                             }
                         },
