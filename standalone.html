@@ -425,20 +425,25 @@
           
           let videoPrompt = "";
           if (!isVideo) {
-            const reader = new FileReader();
-            const base64Promise = new Promise((resolve) => {
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.readAsDataURL(file);
-            });
-            const base64Data = await base64Promise;
-            
-            const descRes = await fetch(`${BACKEND_URL}/api/describe-image`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ imageData: base64Data })
-            });
-            const descData = await descRes.json();
-            videoPrompt = descData.description || "";
+            try {
+              const reader = new FileReader();
+              const base64Promise = new Promise((resolve) => {
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(file);
+              });
+              const base64Data = await base64Promise;
+              
+              const descRes = await fetch(`${BACKEND_URL}/api/describe-image`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ imageData: base64Data })
+              });
+              const descData = await descRes.json();
+              videoPrompt = descData.description || "";
+            } catch (err) {
+              console.error('Failed to describe image:', err);
+              videoPrompt = "";
+            }
           }
           
           const maxBatch = await getMaxBatchId();

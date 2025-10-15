@@ -191,43 +191,45 @@ def generate_video_prompt():
 
 @app.route('/api/describe-image', methods=['POST'])
 def describe_image():
-    import base64
-    data = request.json
-    image_data = data.get('imageData', '')
-    
-    response = requests.post(
-        'https://api.anthropic.com/v1/messages',
-        headers={
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json'
-        },
-        json={
-            'model': 'claude-sonnet-4-20250514',
-            'max_tokens': 1024,
-            'messages': [{
-                'role': 'user',
-                'content': [
-                    {
-                        'type': 'image',
-                        'source': {
-                            'type': 'base64',
-                            'media_type': 'image/jpeg',
-                            'data': image_data
+    try:
+        data = request.json
+        image_data = data.get('imageData', '')
+        
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 1024,
+                'messages': [{
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'image',
+                            'source': {
+                                'type': 'base64',
+                                'media_type': 'image/jpeg',
+                                'data': image_data
+                            }
+                        },
+                        {
+                            'type': 'text',
+                            'text': 'Describe this image in detail, focusing on the visual elements, composition, lighting, mood, and any notable features. Keep the description concise but comprehensive.'
                         }
-                    },
-                    {
-                        'type': 'text',
-                        'text': 'Describe this image in detail, focusing on the visual elements, composition, lighting, mood, and any notable features. Keep the description concise but comprehensive.'
-                    }
-                ]
-            }]
-        }
-    )
-    
-    result = response.json()
-    description = result['content'][0]['text']
-    return jsonify({'description': description})
+                    ]
+                }]
+            }
+        )
+        
+        result = response.json()
+        description = result['content'][0]['text']
+        return jsonify({'description': description})
+    except Exception as e:
+        return jsonify({'error': str(e), 'description': ''}), 500
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
