@@ -20,7 +20,7 @@
       { id: "seedream_4", label: "Seedream 4", apiModel: "bytedance/seedream-v4-text-to-image", apiEditModel: "bytedance/seedream-v4-edit" },
       { id: "nano_banana", label: "Nano Banana", apiModel: "google/nano-banana", apiEditModel: "google/nano-banana-edit" },
       { id: "gpt4o_image", label: "GPT-4o Image", apiType: "gpt4o" },
-      { id: "flux_kontext", label: "Flux Kontext", apiType: "flux_kontext" },
+      { id: "flux_kontext", label: "Flux Kontext", apiType: "flux_kontext", supportsImageToImage: true },
       { id: "imagen4", label: "Imagen 4", apiModel: "google/imagen4" },
       { id: "ideogram", label: "Ideogram", apiModel: "ideogram/v3-text-to-image", apiEditModel: "ideogram/v3-edit" },
       { id: "development", label: "Development", apiType: "mock" },
@@ -114,6 +114,9 @@
           promptUpsampling: false,
           model: "flux-kontext-pro"
         };
+        if (referenceImageUrl) {
+          body.inputImage = referenceImageUrl;
+        }
         const res = await fetch(`${BACKEND_URL}/api/flux-kontext-create`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -317,8 +320,708 @@
       }
     }
 
+    async function uploadVideo(file) {
+      const reader = new FileReader();
+      return new Promise((resolve, reject) => {
+        reader.onload = async () => {
+          try {
+            const base64Data = reader.result.split(',')[1];
+            const res = await fetch(`${BACKEND_URL}/api/video/upload`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: file.name,
+                mimeType: file.type,
+                fileData: base64Data
+              })
+            });
+            const data = await res.json();
+            resolve(data);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function appendVideoToSheet(videoPath, filename, audioClipId, textHook, audioOptions, batchId, batchConceptId) {
+      const token = await getGoogleAccessToken();
+      const audio = audioOptions.find(a => a.clip_id === audioClipId) || audioOptions[0];
+      
+      const row = [
+        batchId || "",
+        batchConceptId || "",
+        audio.song_id || "",
+        audio.song_name || "",
+        audio.lyric || "",
+        textHook || "false",
+        "",
+        audio.length || "",
+        "",
+        "",
+        audio.audio_link || "",
+        "",
+        "video uploaded",
+        filename || "",
+        videoPath
+      ];
+      
+      const res = await fetch(`${BACKEND_URL}/api/sheets/append`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sheet: "02_Video", values: [row] })
+      });
+      
+      if (!res.ok) throw new Error(`Google Sheets API error: ${res.status}`);
+      return await res.json();
+    }
+
+    function MediaUploadTab({ audioOptions }) {
+      const [file, setFile] = useState(null);
+      const [selectedAudioId, setSelectedAudioId] = useState(audioOptions[0]?.clip_id || "");
+      const [hasTextHook, setHasTextHook] = useState(false);
+      const [textHook, setTextHook] = useState("we're good");
+      const [isUploading, setIsUploading] = useState(false);
+      const [uploadHistory, setUploadHistory] = useState([]);
+      const [isDragging, setIsDragging] = useState(false);
+      
+      function handleDragOver(e) {
+        e.preventDefault();
+        setIsDragging(true);
+      }
+      
+      function handleDragLeave(e) {
+        e.preventDefault();
+        setIsDragging(false);
+      }
+      
+      function handleDrop(e) {
+        e.preventDefault();
+        setIsDragging(false);
+        const droppedFile = e.dataTransfer.files[0];
+        if (droppedFile && (droppedFile.type.startsWith('video/') || droppedFile.type.startsWith('image/'))) {
+          setFile(droppedFile);
+        }
+      }
+      
+      async function handleUpload() {
+        if (!file) {
+          alert("Please select a file");
+          return;
+        }
+        
+        const isVideo = file.type.startsWith('video/');
+        setIsUploading(true);
+        try {
+          const uploadResult = await uploadVideo(file);
+          if (!uploadResult.success) {
+            throw new Error('Upload failed: ' + JSON.stringify(uploadResult));
+          }
+          
+          let videoPrompt = "";
+          if (!isVideo) {
+            const reader = new FileReader();
+            const base64Promise = new Promise((resolve) => {
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.readAsDataURL(file);
+            });
+            const base64Data = await base64Promise;
+            
+            const descRes = await fetch(`${BACKEND_URL}/api/describe-image`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageData: base64Data })
+            });
+            const descData = await descRes.json();
+            videoPrompt = descData.description || "";
+          }
+          
+          const maxBatch = await getMaxBatchId();
+          const batchId = maxBatch + 1;
+          const batchConceptId = `${batchId}.1`;
+          const audio = audioOptions.find(a => a.clip_id === selectedAudioId) || audioOptions[0];
+          const fullUrl = `${window.location.origin}${uploadResult.url}`;
+          
+          const token = await getGoogleAccessToken();
+          const row = isVideo ? [
+            batchId || "",
+            batchConceptId || "",
+            audio.song_id || "",
+            audio.song_name || "",
+            audio.lyric || "",
+            hasTextHook ? textHook : "false",
+            "",
+            audio.length || "",
+            "",
+            "",
+            audio.audio_link || "",
+            "",
+            "video uploaded",
+            fullUrl,
+            ""
+          ] : [
+            batchId || "",
+            batchConceptId || "",
+            audio.song_id || "",
+            audio.song_name || "",
+            audio.lyric || "",
+            hasTextHook ? textHook : "false",
+            "",
+            audio.length || "",
+            videoPrompt,
+            "",
+            audio.audio_link || "",
+            fullUrl,
+            "concept approved"
+          ];
+          
+          const res = await fetch(`${BACKEND_URL}/api/sheets/append`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ sheet: "02_Video", values: [row] })
+          });
+          
+          if (!res.ok) throw new Error(`Google Sheets API error: ${res.status}`);
+          
+          setUploadHistory(prev => [{
+            timestamp: new Date().toISOString(),
+            filename: file.name,
+            type: isVideo ? 'Video' : 'Image',
+            path: uploadResult.path,
+            audio: audio.song_name || "",
+            textHook: hasTextHook ? textHook : "None"
+          }, ...prev]);
+          
+          setFile(null);
+          alert(`${isVideo ? 'Video' : 'Image'} uploaded successfully!`);
+        } catch (err) {
+          alert("Upload failed: " + err.message);
+          console.error(err);
+        }
+        setIsUploading(false);
+      }
+      
+      return (
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-3xl border border-neutral-200 p-6">
+            <h2 className="text-xl font-semibold mb-4">Upload Media</h2>
+            
+            <div className="grid gap-4">
+              <div>
+                <label className="text-sm font-medium">Video or Image File</label>
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`mt-1 p-8 rounded-xl border-2 border-dashed transition-colors ${
+                    isDragging ? 'border-blue-500 bg-blue-50' : 'border-neutral-300 bg-neutral-50'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="video/*,image/*"
+                    onChange={(e) => setFile(e.target.files[0])}
+                    className="hidden"
+                    id="media-upload"
+                  />
+                  <label htmlFor="media-upload" className="cursor-pointer flex flex-col items-center gap-2">
+                    <svg className="w-12 h-12 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <span className="text-sm text-neutral-600">Drag & drop video or image here or click to browse</span>
+                  </label>
+                </div>
+                {file && (
+                  <div className="mt-2 p-2 bg-neutral-100 rounded-lg flex items-center justify-between">
+                    <span className="text-sm text-neutral-700">{file.name} ({file.type.startsWith('video/') ? 'Video' : 'Image'})</span>
+                    <button onClick={() => setFile(null)} className="text-red-600 hover:text-red-800 text-sm">Remove</button>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium">Audio Track</label>
+                <select
+                  value={selectedAudioId}
+                  onChange={(e) => setSelectedAudioId(e.target.value)}
+                  className="w-full mt-1 p-2 rounded-xl border border-neutral-300"
+                >
+                  {audioOptions.map((a, i) => {
+                    const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
+                    return <option key={i} value={a.clip_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                  })}
+                </select>
+              </div>
+              
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={hasTextHook}
+                    onChange={(e) => setHasTextHook(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Add text hook
+                </label>
+                {hasTextHook && (
+                  <input
+                    type="text"
+                    value={textHook}
+                    onChange={(e) => setTextHook(e.target.value)}
+                    className="mt-2 w-full p-2 rounded-xl border border-neutral-300"
+                    placeholder="Enter text hook"
+                  />
+                )}
+              </div>
+              
+              <button
+                onClick={handleUpload}
+                disabled={isUploading || !file}
+                className="px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60"
+              >
+                {isUploading ? "Uploading..." : "Upload"}
+              </button>
+            </div>
+          </div>
+          
+          {uploadHistory.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Upload History</h3>
+              <div className="overflow-x-auto border border-neutral-200 rounded-2xl">
+                <table className="min-w-full text-sm bg-white">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="text-left p-2">Timestamp</th>
+                      <th className="text-left p-2">Type</th>
+                      <th className="text-left p-2">Filename</th>
+                      <th className="text-left p-2">Audio</th>
+                      <th className="text-left p-2">Text Hook</th>
+                      <th className="text-left p-2">Path</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadHistory.map((item, i) => (
+                      <tr key={i} className="border-t border-neutral-200">
+                        <td className="p-2 whitespace-nowrap">{new Date(item.timestamp).toLocaleString()}</td>
+                        <td className="p-2">{item.type}</td>
+                        <td className="p-2">{item.filename}</td>
+                        <td className="p-2">{item.audio}</td>
+                        <td className="p-2">{item.textHook}</td>
+                        <td className="p-2 font-mono text-xs">{item.path}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function VideoUploadTab_OLD({ audioOptions }) {
+      const [videoFile, setVideoFile] = useState(null);
+      const [selectedAudioId, setSelectedAudioId] = useState(audioOptions[0]?.clip_id || "");
+      const [hasTextHook, setHasTextHook] = useState(false);
+      const [textHook, setTextHook] = useState("we're good");
+      const [isUploading, setIsUploading] = useState(false);
+      const [uploadHistory, setUploadHistory] = useState([]);
+      const [isDragging, setIsDragging] = useState(false);
+      
+      function handleDragOver(e) {
+        e.preventDefault();
+        setIsDragging(true);
+      }
+      
+      function handleDragLeave(e) {
+        e.preventDefault();
+        setIsDragging(false);
+      }
+      
+      function handleDrop(e) {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('video/')) {
+          setVideoFile(file);
+        }
+      }
+      
+      async function handleUpload() {
+        if (!videoFile) {
+          alert("Please select a video file");
+          return;
+        }
+        
+        setIsUploading(true);
+        try {
+          const uploadResult = await uploadVideo(videoFile);
+          console.log('Upload result:', uploadResult);
+          if (!uploadResult.success) {
+            throw new Error('Upload failed: ' + JSON.stringify(uploadResult));
+          }
+          
+          const maxBatch = await getMaxBatchId();
+          const batchId = maxBatch + 1;
+          const batchConceptId = `${batchId}.1`;
+          const fullUrl = `${window.location.origin}${uploadResult.url}`;
+          
+          await appendVideoToSheet(fullUrl, uploadResult.filename, selectedAudioId, hasTextHook ? textHook : "false", audioOptions, batchId, batchConceptId);
+          
+          setUploadHistory(prev => [{
+            timestamp: new Date().toISOString(),
+            filename: videoFile.name,
+            videoPath: uploadResult.path,
+            audio: audioOptions.find(a => a.clip_id === selectedAudioId)?.song_name || "",
+            textHook: hasTextHook ? textHook : "None"
+          }, ...prev]);
+          
+          setVideoFile(null);
+          alert("Video uploaded successfully!");
+        } catch (err) {
+          alert("Upload failed: " + err.message);
+          console.error(err);
+        }
+        setIsUploading(false);
+      }
+      
+      return (
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-3xl border border-neutral-200 p-6">
+            <h2 className="text-xl font-semibold mb-4">Upload Video for Processing</h2>
+            
+            <div className="grid gap-4">
+              <div>
+                <label className="text-sm font-medium">Video File</label>
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`mt-1 p-8 rounded-xl border-2 border-dashed transition-colors ${
+                    isDragging ? 'border-blue-500 bg-blue-50' : 'border-neutral-300 bg-neutral-50'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="video/*"
+                    onChange={(e) => setVideoFile(e.target.files[0])}
+                    className="hidden"
+                    id="video-upload"
+                  />
+                  <label htmlFor="video-upload" className="cursor-pointer flex flex-col items-center gap-2">
+                    <svg className="w-12 h-12 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <span className="text-sm text-neutral-600">Drag & drop video here or click to browse</span>
+                  </label>
+                </div>
+                {videoFile && (
+                  <div className="mt-2 p-2 bg-neutral-100 rounded-lg flex items-center justify-between">
+                    <span className="text-sm text-neutral-700">{videoFile.name}</span>
+                    <button onClick={() => setVideoFile(null)} className="text-red-600 hover:text-red-800 text-sm">Remove</button>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium">Audio Track</label>
+                <select
+                  value={selectedAudioId}
+                  onChange={(e) => setSelectedAudioId(e.target.value)}
+                  className="w-full mt-1 p-2 rounded-xl border border-neutral-300"
+                >
+                  {audioOptions.map((a, i) => {
+                    const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
+                    return <option key={i} value={a.clip_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                  })}
+                </select>
+              </div>
+              
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={hasTextHook}
+                    onChange={(e) => setHasTextHook(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Add text hook
+                </label>
+                {hasTextHook && (
+                  <input
+                    type="text"
+                    value={textHook}
+                    onChange={(e) => setTextHook(e.target.value)}
+                    className="mt-2 w-full p-2 rounded-xl border border-neutral-300"
+                    placeholder="Enter text hook"
+                  />
+                )}
+              </div>
+              
+              <button
+                onClick={handleUpload}
+                disabled={isUploading || !videoFile}
+                className="px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60"
+              >
+                {isUploading ? "Uploading..." : "Upload & Queue for Processing"}
+              </button>
+            </div>
+          </div>
+          
+          {uploadHistory.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Upload History</h3>
+              <div className="overflow-x-auto border border-neutral-200 rounded-2xl">
+                <table className="min-w-full text-sm bg-white">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="text-left p-2">Timestamp</th>
+                      <th className="text-left p-2">Filename</th>
+                      <th className="text-left p-2">Audio</th>
+                      <th className="text-left p-2">Text Hook</th>
+                      <th className="text-left p-2">Video Path</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadHistory.map((item, i) => (
+                      <tr key={i} className="border-t border-neutral-200">
+                        <td className="p-2 whitespace-nowrap">{new Date(item.timestamp).toLocaleString()}</td>
+                        <td className="p-2">{item.filename}</td>
+                        <td className="p-2">{item.audio}</td>
+                        <td className="p-2">{item.textHook}</td>
+                        <td className="p-2 font-mono text-xs">{item.videoPath}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ImageUploadTab({ audioOptions }) {
+      const [imageFile, setImageFile] = useState(null);
+      const [selectedAudioId, setSelectedAudioId] = useState(audioOptions[0]?.clip_id || "");
+      const [hasTextHook, setHasTextHook] = useState(false);
+      const [textHook, setTextHook] = useState("we're good");
+      const [isUploading, setIsUploading] = useState(false);
+      const [uploadHistory, setUploadHistory] = useState([]);
+      const [isDragging, setIsDragging] = useState(false);
+      
+      function handleDragOver(e) {
+        e.preventDefault();
+        setIsDragging(true);
+      }
+      
+      function handleDragLeave(e) {
+        e.preventDefault();
+        setIsDragging(false);
+      }
+      
+      function handleDrop(e) {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) {
+          setImageFile(file);
+        }
+      }
+      
+      async function handleUpload() {
+        if (!imageFile) {
+          alert("Please select an image file");
+          return;
+        }
+        
+        setIsUploading(true);
+        try {
+          const uploadResult = await uploadVideo(imageFile);
+          console.log('Upload result:', uploadResult);
+          if (!uploadResult.success) {
+            throw new Error('Upload failed: ' + JSON.stringify(uploadResult));
+          }
+          
+          const maxBatch = await getMaxBatchId();
+          const batchId = maxBatch + 1;
+          const batchConceptId = `${batchId}.1`;
+          const audio = audioOptions.find(a => a.clip_id === selectedAudioId) || audioOptions[0];
+          const fullUrl = `${window.location.origin}${uploadResult.url}`;
+          
+          const token = await getGoogleAccessToken();
+          const row = [
+            batchId || "",
+            batchConceptId || "",
+            audio.song_id || "",
+            audio.song_name || "",
+            audio.lyric || "",
+            hasTextHook ? textHook : "false",
+            "",
+            audio.length || "",
+            "",
+            "",
+            audio.audio_link || "",
+            fullUrl,
+            "image uploaded"
+          ];
+          
+          const res = await fetch(`${BACKEND_URL}/api/sheets/append`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ sheet: "02_Video", values: [row] })
+          });
+          
+          if (!res.ok) throw new Error(`Google Sheets API error: ${res.status}`);
+          
+          setUploadHistory(prev => [{
+            timestamp: new Date().toISOString(),
+            filename: imageFile.name,
+            imagePath: uploadResult.path,
+            audio: audio.song_name || "",
+            textHook: hasTextHook ? textHook : "None"
+          }, ...prev]);
+          
+          setImageFile(null);
+          alert("Image uploaded successfully!");
+        } catch (err) {
+          alert("Upload failed: " + err.message);
+          console.error(err);
+        }
+        setIsUploading(false);
+      }
+      
+      return (
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-3xl border border-neutral-200 p-6">
+            <h2 className="text-xl font-semibold mb-4">Upload Image</h2>
+            
+            <div className="grid gap-4">
+              <div>
+                <label className="text-sm font-medium">Image File</label>
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`mt-1 p-8 rounded-xl border-2 border-dashed transition-colors ${
+                    isDragging ? 'border-blue-500 bg-blue-50' : 'border-neutral-300 bg-neutral-50'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setImageFile(e.target.files[0])}
+                    className="hidden"
+                    id="image-upload"
+                  />
+                  <label htmlFor="image-upload" className="cursor-pointer flex flex-col items-center gap-2">
+                    <svg className="w-12 h-12 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <span className="text-sm text-neutral-600">Drag & drop image here or click to browse</span>
+                  </label>
+                </div>
+                {imageFile && (
+                  <div className="mt-2 p-2 bg-neutral-100 rounded-lg flex items-center justify-between">
+                    <span className="text-sm text-neutral-700">{imageFile.name}</span>
+                    <button onClick={() => setImageFile(null)} className="text-red-600 hover:text-red-800 text-sm">Remove</button>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="text-sm font-medium">Audio Track</label>
+                <select
+                  value={selectedAudioId}
+                  onChange={(e) => setSelectedAudioId(e.target.value)}
+                  className="w-full mt-1 p-2 rounded-xl border border-neutral-300"
+                >
+                  {audioOptions.map((a, i) => {
+                    const lyricPreview = a.lyric.split(' ').slice(0, 5).join(' ') + '...';
+                    return <option key={i} value={a.clip_id}>{a.song_name} - {lyricPreview} ({a.length})</option>;
+                  })}
+                </select>
+              </div>
+              
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={hasTextHook}
+                    onChange={(e) => setHasTextHook(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Add text hook
+                </label>
+                {hasTextHook && (
+                  <input
+                    type="text"
+                    value={textHook}
+                    onChange={(e) => setTextHook(e.target.value)}
+                    className="mt-2 w-full p-2 rounded-xl border border-neutral-300"
+                    placeholder="Enter text hook"
+                  />
+                )}
+              </div>
+              
+              <button
+                onClick={handleUpload}
+                disabled={isUploading || !imageFile}
+                className="px-4 py-2 rounded-2xl bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-60"
+              >
+                {isUploading ? "Uploading..." : "Upload"}
+              </button>
+            </div>
+          </div>
+          
+          {uploadHistory.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold mb-2">Upload History</h3>
+              <div className="overflow-x-auto border border-neutral-200 rounded-2xl">
+                <table className="min-w-full text-sm bg-white">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="text-left p-2">Timestamp</th>
+                      <th className="text-left p-2">Filename</th>
+                      <th className="text-left p-2">Audio</th>
+                      <th className="text-left p-2">Text Hook</th>
+                      <th className="text-left p-2">Image Path</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadHistory.map((item, i) => (
+                      <tr key={i} className="border-t border-neutral-200">
+                        <td className="p-2 whitespace-nowrap">{new Date(item.timestamp).toLocaleString()}</td>
+                        <td className="p-2">{item.filename}</td>
+                        <td className="p-2">{item.audio}</td>
+                        <td className="p-2">{item.textHook}</td>
+                        <td className="p-2 font-mono text-xs">{item.imagePath}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function ConceptBoardMock() {
+      const [activeTab, setActiveTab] = useState("generate");
       const [prompt, setPrompt] = useState("");
+      const [isEnhancing, setIsEnhancing] = useState(false);
       const [models, setModels] = useState(["seedream_4", "nano_banana"]);
       const [count, setCount] = useState(1);
       const [referenceFile, setReferenceFile] = useState(null);
@@ -352,7 +1055,7 @@
 
       React.useEffect(() => {
         if (includeReference) {
-          setModels(prev => prev.filter(m => !["flux_kontext", "imagen4", "ideogram"].includes(m)));
+          setModels(prev => prev.filter(m => !["imagen4", "ideogram"].includes(m)));
           if (selectedRefImage) setReferencePreview(selectedRefImage);
         } else {
           setReferencePreview(null);
@@ -423,13 +1126,28 @@
                 console.log("Got image URL:", imgUrl);
               }
               
+              let videoPrompt = `${prompt}: cinematic slow dolly movement, soft film grain, shallow depth of field, 24fps, gentle parallax, subtle camera drift for emotional focus, light flares and depth layering for realism, smooth motion easing, immersive atmosphere that draws the viewer in`;
+              try {
+                const vpRes = await fetch(`${BACKEND_URL}/api/generate-video-prompt`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ prompt: finalPrompt })
+                });
+                const vpData = await vpRes.json();
+                if (vpData.videoPrompt) {
+                  videoPrompt = vpData.videoPrompt;
+                }
+              } catch (err) {
+                console.error('Failed to generate video prompt:', err);
+              }
+              
               return {
                 id: `${conceptId}-${modelId}-${index}-${Math.random().toString(36).slice(2, 6)}`,
                 concept_id: conceptId,
                 model: modelId,
                 prompt: finalPrompt,
                 image_url: imgUrl,
-                video_prompt: `${prompt}: cinematic slow dolly movement, soft film grain, shallow depth of field, 24fps, gentle parallax, subtle camera drift for emotional focus, light flares and depth layering for realism, smooth motion easing, immersive atmosphere that draws the viewer in`,
+                video_prompt: videoPrompt,
                 clip_id: selectedAudio.clip_id || "",
                 song_id: selectedAudio.song_id || "",
                 audio_clip: selectedAudio.song_name || "",
@@ -507,13 +1225,55 @@
             <div className="max-w-6xl mx-auto p-4">
               <h1 className="text-2xl font-semibold">Concept Board</h1>
               <p className="text-sm text-neutral-600">Powered by Kie.AI</p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => setActiveTab("generate")}
+                  className={`px-4 py-2 rounded-xl ${activeTab === "generate" ? "bg-neutral-900 text-white" : "bg-white text-neutral-900 border border-neutral-300"}`}
+                >
+                  Generate Images
+                </button>
+                <button
+                  onClick={() => setActiveTab("upload")}
+                  className={`px-4 py-2 rounded-xl ${activeTab === "upload" ? "bg-neutral-900 text-white" : "bg-white text-neutral-900 border border-neutral-300"}`}
+                >
+                  Upload Media
+                </button>
+              </div>
             </div>
           </header>
 
           <main className="max-w-6xl mx-auto p-4">
+            {activeTab === "upload" ? (
+              <MediaUploadTab audioOptions={audioOptions} />
+            ) : (
+            <>
             <section className="grid grid-cols-1 md:grid-cols-12 gap-4">
               <div className="md:col-span-8">
-                <label className="text-sm font-medium">Prompt</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">Prompt</label>
+                  <button
+                    onClick={async () => {
+                      if (!prompt.trim()) return;
+                      setIsEnhancing(true);
+                      try {
+                        const res = await fetch(`${BACKEND_URL}/api/enhance-prompt`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ prompt, hasReference: includeReference })
+                        });
+                        const data = await res.json();
+                        setPrompt(data.enhanced);
+                      } catch (err) {
+                        alert('Failed to enhance prompt: ' + err.message);
+                      }
+                      setIsEnhancing(false);
+                    }}
+                    disabled={isEnhancing || !prompt.trim()}
+                    className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {isEnhancing ? 'Enhancing...' : 'Enhance Prompt'}
+                  </button>
+                </div>
                 <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe your scene…" className="w-full mt-1 p-3 rounded-2xl border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-300" rows={3} />
               </div>
 
@@ -522,7 +1282,7 @@
                   <label className="text-sm font-medium">Models</label>
                   <div className="mt-1 grid gap-2">
                     {MODEL_OPTIONS.map((m) => {
-                      const noImageToImage = ["flux_kontext", "imagen4", "ideogram"].includes(m.id);
+                      const noImageToImage = ["imagen4", "ideogram"].includes(m.id);
                       const isDisabled = includeReference && noImageToImage;
                       return (
                         <label key={m.id} className={`flex items-center gap-2 ${isDisabled ? "opacity-50" : ""}`}>
@@ -660,6 +1420,8 @@
                 </div>
               )}
             </section>
+            </>
+            )}
           </main>
         </div>
       );
