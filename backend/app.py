@@ -267,5 +267,64 @@ def video_upload():
         'url': f'/uploads/{data["filename"]}'
     })
 
+@app.route('/api/uploads/list', methods=['GET'])
+def list_uploads():
+    from pathlib import Path
+    import os
+    
+    try:
+        upload_dir = Path('/app/uploads')
+        files = []
+        media_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp3', '.wav', '.m4a', '.ogg'}
+        
+        if upload_dir.exists():
+            for file_path in upload_dir.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in media_extensions:
+                    stat = file_path.stat()
+                    files.append({
+                        'filename': file_path.name,
+                        'size': stat.st_size,
+                        'modified': stat.st_mtime
+                    })
+        
+        files.sort(key=lambda x: x['modified'], reverse=True)
+        return jsonify({'files': files})
+    except Exception as e:
+        return jsonify({'error': str(e), 'files': []}), 500
+
+@app.route('/api/uploads/delete/<filename>', methods=['DELETE'])
+def delete_upload(filename):
+    from pathlib import Path
+    
+    try:
+        upload_dir = Path('/app/uploads')
+        file_path = upload_dir / filename
+        
+        if file_path.exists() and file_path.is_file():
+            file_path.unlink()
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'File not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/uploads/delete-all', methods=['DELETE'])
+def delete_all_uploads():
+    from pathlib import Path
+    
+    try:
+        upload_dir = Path('/app/uploads')
+        count = 0
+        
+        if upload_dir.exists():
+            for file_path in upload_dir.iterdir():
+                if file_path.is_file():
+                    file_path.unlink()
+                    count += 1
+        
+        return jsonify({'success': True, 'deleted': count})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5000)
